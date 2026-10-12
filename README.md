@@ -1,6 +1,8 @@
 # Rynex 10K
 
-Cópia estática do site Rynex 10k preparada para publicação no GitHub Pages.
+site Rynex 10k preparada para publicação no GitHub Pages.
+O site Rynex 10K foi feito por mim o Myst fiz com amor e carinho!
+me sobe de cargo caleb <3
 
 ## Publicação
 
