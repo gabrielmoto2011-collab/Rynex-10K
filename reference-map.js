@@ -193,7 +193,7 @@ window.RZK_REFERENCE = {
     },
     "CONTA COM CDK MUITO OP": {
       "storeId": "1790000000000000000000000000000001",
-      "image": "assets/products/conta-com-cdk.jpeg",
+      "image": "assets/products/conta-com-cdk.png",
       "emoji": "🎮",
       "sourcePath": "/product/1790000000000000000000000000000001"
     }
