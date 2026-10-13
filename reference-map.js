@@ -190,6 +190,12 @@ window.RZK_REFERENCE = {
       "image": "assets/products/otimizacao-pc-e-celular.png",
       "emoji": "🩵",
       "sourcePath": "/product/1772455450239614544416600255"
+    },
+    "CONTA COM CDK MUITO OP": {
+      "storeId": "1790000000000000000000000000000001",
+      "image": "assets/products/conta-com-cdk.webp",
+      "emoji": "🎮",
+      "sourcePath": "/product/1790000000000000000000000000000001"
     }
   }
 };

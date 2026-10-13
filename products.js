@@ -26,7 +26,8 @@ const raw=[
 {id:'luck',name:'TESTE SUA SORTE HJJ!!!!',category:'Diversos',price:1.47,imageName:'TESTE SUA SORTE HJJ!!!!'},
 {id:'methods',name:'Métodos 1 Real',category:'Diversos',price:.99,imageName:'Métodos 1 Real'},
 {id:'keywords',name:'Palavras Chaves + 500 Questões + Redação Nota 1000',category:'Diversos',price:1.99,oldPrice:27.90,discount:'-93%',imageName:'Palavras Chaves + 500 Questões + Redação Nota 1000',stock:20,automatic:true},
-{id:'optimize',name:'Otimizaçao PC e Celular',category:'Diversos',price:3.99,imageName:'Otimizaçao PC e Celular'}
+{id:'optimize',name:'Otimizaçao PC e Celular',category:'Diversos',price:3.99,imageName:'Otimizaçao PC e Celular'},
+{id:'conta-cdk',name:'CONTA COM CDK MUITO OP',category:'Jogos',price:4.50,imageName:'CONTA COM CDK MUITO OP',stock:0,available:false}
 ];
 const refs=window.RZK_REFERENCE.products;
 window.RZK_PRODUCTS=raw.map(p=>({...p,...refs[p.imageName],name:p.name,category:p.category}));
