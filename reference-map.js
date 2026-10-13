@@ -13,6 +13,11 @@ window.RZK_REFERENCE = {
       "sourcePath": "/category/jogos"
     },
     {
+      "title": "Blox Fruits",
+      "image": "assets/categories/blox-fruits.png",
+      "sourcePath": "/category/blox-fruits"
+    },
+    {
       "title": "Produtos do Discord",
       "image": "assets/categories/category-03.png",
       "sourcePath": "/category/discord"
