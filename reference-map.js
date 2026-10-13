@@ -3,34 +3,9 @@ window.RZK_REFERENCE = {
   "hero": "assets/rynex/banner-mais-vendidos.webp",
   "categories": [
     {
-      "title": "Destaques",
-      "image": "assets/categories/category-01.png",
-      "sourcePath": "/category/17498184186957014240966308445576"
-    },
-    {
-      "title": "Jogos Populares",
-      "image": "assets/categories/category-02.png",
-      "sourcePath": "/category/jogos"
-    },
-    {
       "title": "Blox Fruits",
       "image": "assets/categories/blox-fruits.png",
       "sourcePath": "/category/blox-fruits"
-    },
-    {
-      "title": "Produtos do Discord",
-      "image": "assets/categories/category-03.png",
-      "sourcePath": "/category/discord"
-    },
-    {
-      "title": "Assinaturas Exclusivas",
-      "image": "assets/categories/category-04.png",
-      "sourcePath": "/category/streamings"
-    },
-    {
-      "title": "Produtos Diversos",
-      "image": "assets/categories/category-05.png",
-      "sourcePath": "/category/1771448468275983674435601"
     }
   ],
   "products": {
