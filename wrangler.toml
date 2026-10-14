@@ -1,0 +1,9 @@
+name = "rynex-store"
+pages_build_output_dir = "."
+compatibility_date = "2026-10-14"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rynex-store-db"
+database_id = "43cf8d72-3b3c-4700-8832-067885ced6bc"
+migrations_dir = "migrations"
