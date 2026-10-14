@@ -1,0 +1,18 @@
+{
+  "name": "rynex-store",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Loja Rynex em Cloudflare Pages e D1",
+  "scripts": {
+    "dev": "wrangler pages dev .",
+    "deploy": "wrangler pages deploy . --project-name=rynex-store",
+    "db:apply": "wrangler d1 migrations apply rynex-store-db --remote",
+    "check": "node --input-type=module --check < 'functions/api/[[path]].js'"
+  },
+  "devDependencies": {
+    "wrangler": "^4.43.0"
+  },
+  "optionalDependencies": {
+    "@cloudflare/workerd-linux-64": "^1.20261012.1"
+  }
+}

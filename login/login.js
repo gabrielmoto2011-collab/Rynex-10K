@@ -1,0 +1,9 @@
+(()=>{
+const form=document.querySelector('#auth-form'),title=document.querySelector('#auth-title'),switchButton=document.querySelector('#auth-switch'),switchCopy=document.querySelector('#auth-switch-copy'),submit=document.querySelector('#auth-submit'),message=document.querySelector('#auth-message'),password=document.querySelector('#password-input');
+let registering=false;
+function setMode(next){registering=next;title.textContent=registering?'Criar sua conta':'Entre na sua conta';submit.textContent=registering?'Criar conta':'Entrar';switchCopy.textContent=registering?'Já tem uma conta?':'Ainda não tem conta?';switchButton.textContent=registering?'Entrar':'Criar conta';password.autocomplete=registering?'new-password':'current-password';password.minLength=registering?12:1;message.textContent='';}
+switchButton.addEventListener('click',()=>setMode(!registering));
+form.addEventListener('submit',async e=>{e.preventDefault();message.className='commerce-error commerce-field full';message.textContent='';submit.disabled=true;submit.textContent=registering?'Criando conta…':'Entrando…';try{const response=await fetch(`/api/auth/${registering?'register':'login'}`,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({email:document.querySelector('#email-input').value,password:password.value})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Não foi possível entrar.');const next=new URLSearchParams(location.search).get('next');location.assign(next&&next.startsWith('/')&&!next.startsWith('//')?next:'/account/')}catch(error){message.textContent=error.message||'Erro de conexão. Tente novamente.'}finally{submit.disabled=false;submit.textContent=registering?'Criar conta':'Entrar'}});
+fetch('/api/auth/me',{credentials:'same-origin'}).then(r=>r.json()).then(data=>{if(data.user)location.replace('/account/')}).catch(()=>{});
+setMode(false);
+})();
