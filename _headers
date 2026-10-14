@@ -1,0 +1,12 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://sdk.mercadopago.com; connect-src 'self' https://api.mercadopago.com; frame-src https://www.mercadopago.com.br https://sandbox.mercadopago.com.br; base-uri 'self'; form-action 'self' https://www.mercadopago.com.br https://sandbox.mercadopago.com.br; frame-ancestors 'none'
+
+/admin/*
+  X-Robots-Tag: noindex, nofollow
+
+/account/*
+  X-Robots-Tag: noindex, nofollow
