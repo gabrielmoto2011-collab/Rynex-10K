@@ -95,6 +95,17 @@ async function decryptPayload(env, row) {
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(row.iv) }, key, base64ToBytes(row.encrypted_payload));
   return JSON.parse(new TextDecoder().decode(plain));
 }
+async function getSetting(env, key) {
+  const row = await env.DB.prepare('SELECT encrypted_payload,iv FROM settings WHERE key=?').bind(key).first();
+  if (!row) return '';
+  try { return String((await decryptPayload(env, row)).value || ''); } catch { return ''; }
+}
+async function setSetting(env, key, value) {
+  const encrypted = await encryptPayload(env, { value });
+  await env.DB.prepare('INSERT INTO settings(key,encrypted_payload,iv,updated_at) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,updated_at=excluded.updated_at').bind(key, encrypted.encrypted, encrypted.iv, nowIso()).run();
+}
+async function mpAccessToken(env) { return (await getSetting(env, 'mp_access_token')) || env.MP_ACCESS_TOKEN || ''; }
+
 function priceLabel(cents) { return (Number(cents) / 100).toFixed(2); }
 function publicProduct(row, stock = null) {
   return {
@@ -160,10 +171,11 @@ async function processPaymentWebhook(request, env, url) {
   const topic = payload?.type || payload?.topic || url.searchParams.get('topic');
   if (topic && !['payment','payment.created','payment.updated'].includes(topic)) return json({ ok: true, ignored: true });
   if (!paymentId) return json({ ok: true, ignored: true });
-  if (!env.MP_ACCESS_TOKEN) return fail('Mercado Pago não está configurado.', 503);
+  const accessToken = await mpAccessToken(env);
+  if (!accessToken) return fail('Mercado Pago não está configurado.', 503);
   if (!(await checkMpSignature(request, env, paymentId))) return fail('Assinatura do pagamento inválida.', 401);
   const verify = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
-    headers: { authorization: `Bearer ${env.MP_ACCESS_TOKEN}` },
+    headers: { authorization: `Bearer ${accessToken}` },
   });
   if (!verify.ok) return fail('Não foi possível confirmar o pagamento.', 502);
   const payment = await verify.json();
@@ -198,68 +210,58 @@ async function processPaymentWebhook(request, env, url) {
   return json({ ok: true });
 }
 async function createCheckout(request, env, current, url) {
-  if (!env.MP_ACCESS_TOKEN || !env.MP_WEBHOOK_SECRET) return fail('O checkout real ainda não está configurado. Configure as credenciais do Mercado Pago como segredos no Cloudflare.', 503);
-  const body = await readBody(request);
-  const requested = Array.isArray(body.items) ? body.items.slice(0, 20) : [];
+  const accessToken = await mpAccessToken(env);
+  if (!accessToken) return fail('Configure o token do Mercado Pago no painel administrativo.', 503);
+  const body = await readBody(request); const requested = Array.isArray(body.items) ? body.items.slice(0, 20) : [];
   if (!requested.length) return fail('Seu carrinho está vazio.');
   const items = [];
   for (const line of requested) {
     const qty = Math.max(1, Math.min(10, Number.parseInt(line.quantity, 10) || 1));
     const product = await env.DB.prepare('SELECT * FROM products WHERE id=? AND active=1').bind(String(line.productId || '')).first();
     if (!product) return fail('Um produto do carrinho não está mais disponível.', 409);
-    const stock = product.delivery_mode === 'automatic'
-      ? Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE product_id=? AND status='available'").bind(product.id).first())?.n || 0)
-      : 999;
+    const stock = product.delivery_mode === 'automatic' ? Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE product_id=? AND status='available'").bind(product.id).first())?.n || 0) : 999;
     if (stock < qty) return fail(`Estoque insuficiente para ${product.name}.`, 409);
     items.push({ product, qty });
   }
-  const orderId = randomId();
-  const total = items.reduce((sum, x) => sum + Number(x.product.price_cents) * x.qty, 0);
-  const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
-  await env.DB.prepare('UPDATE inventory SET status=\'available\',order_id=NULL WHERE status=\'reserved\' AND order_id IN (SELECT id FROM orders WHERE status=\'pending\' AND expires_at<?)')
-    .bind(nowIso()).run();
+  const orderId = randomId(); const total = items.reduce((sum, x) => sum + Number(x.product.price_cents) * x.qty, 0); const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+  await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE status='reserved' AND order_id IN (SELECT id FROM orders WHERE status='pending' AND expires_at<?)").bind(nowIso()).run();
   await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE status='pending' AND expires_at<?").bind(nowIso()).run();
-  await env.DB.prepare('INSERT INTO orders(id,user_id,status,amount_cents,buyer_email,expires_at) VALUES(?,?,\'pending\',?,?,?)')
-    .bind(orderId, current.actor_id, total, (await env.DB.prepare('SELECT email FROM users WHERE id=?').bind(current.actor_id).first())?.email || null, expiresAt).run();
+  const buyerEmail = (await env.DB.prepare('SELECT email FROM users WHERE id=?').bind(current.actor_id).first())?.email || null;
+  await env.DB.prepare("INSERT INTO orders(id,user_id,status,amount_cents,buyer_email,expires_at) VALUES(?,?, 'pending',?,?,?)").bind(orderId, current.actor_id, total, buyerEmail, expiresAt).run();
   for (const item of items) {
-    await env.DB.prepare('INSERT INTO order_items(id,order_id,product_id,product_name,category,unit_price_cents,quantity,duration_label,delivery_mode) VALUES(?,?,?,?,?,?,?,?,?)')
-      .bind(randomId(), orderId, item.product.id, item.product.name, item.product.category, item.product.price_cents, item.qty, item.product.duration_label, item.product.delivery_mode).run();
+    await env.DB.prepare('INSERT INTO order_items(id,order_id,product_id,product_name,category,unit_price_cents,quantity,duration_label,delivery_mode) VALUES(?,?,?,?,?,?,?,?,?)').bind(randomId(), orderId, item.product.id, item.product.name, item.product.category, item.product.price_cents, item.qty, item.product.duration_label, item.product.delivery_mode).run();
     if (item.product.delivery_mode === 'automatic') {
-      await env.DB.prepare("UPDATE inventory SET status='reserved',order_id=? WHERE id IN (SELECT id FROM inventory WHERE product_id=? AND status='available' ORDER BY created_at LIMIT ?) RETURNING id")
-        .bind(orderId, item.product.id, item.qty).all();
+      await env.DB.prepare("UPDATE inventory SET status='reserved',order_id=? WHERE id IN (SELECT id FROM inventory WHERE product_id=? AND status='available' ORDER BY created_at LIMIT ?) RETURNING id").bind(orderId, item.product.id, item.qty).all();
       const reservedCount = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE order_id=? AND product_id=? AND status='reserved'").bind(orderId, item.product.id).first())?.n || 0);
-      if (reservedCount !== item.qty) {
-        await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE order_id=? AND status='reserved'").bind(orderId).run();
-        await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(orderId).run();
-        return fail(`Estoque insuficiente para ${item.product.name}.`, 409);
-      }
+      if (reservedCount !== item.qty) { await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE order_id=? AND status='reserved'").bind(orderId).run(); await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(orderId).run(); return fail(`Estoque insuficiente para ${item.product.name}.`, 409); }
     }
   }
-  const preferenceBody = {
-    items: items.map(({ product, qty }) => ({ id: product.id, title: product.name, description: product.duration_label || product.description || product.name, quantity: qty, currency_id: 'BRL', unit_price: Number(priceLabel(product.price_cents)) })),
-    external_reference: orderId,
-    notification_url: `${url.origin}/api/payments/webhook`,
-    back_urls: { success: `${url.origin}/account/?pagamento=sucesso`, pending: `${url.origin}/account/?pagamento=pendente`, failure: `${url.origin}/account/?pagamento=falhou` },
-    auto_return: 'approved',
-    expires: true,
-    expiration_date_from: nowIso(),
-    expiration_date_to: expiresAt,
-  };
-  const mp = await fetch('https://api.mercadopago.com/checkout/preferences', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.MP_ACCESS_TOKEN}`, 'content-type': 'application/json', 'x-idempotency-key': orderId },
-    body: JSON.stringify(preferenceBody),
-  });
-  const result = await mp.json().catch(() => ({}));
-  if (!mp.ok || !result.id || !result.init_point) {
-    await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE order_id=? AND status='reserved'").bind(orderId).run();
-    await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(orderId).run();
-    console.error('Mercado Pago preference error', mp.status);
-    return fail('Não foi possível iniciar o checkout. Tente novamente ou fale com o suporte.', 502);
-  }
-  await env.DB.prepare('UPDATE orders SET mp_preference_id=? WHERE id=?').bind(String(result.id), orderId).run();
-  return json({ orderId, checkoutUrl: result.init_point });
+  const payment = await fetch('https://api.mercadopago.com/v1/payments', { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', 'x-idempotency-key': orderId }, body: JSON.stringify({ transaction_amount: Number(priceLabel(total)), description: items.map(({ product, qty }) => `${product.name} x${qty}`).join(', '), payment_method_id: 'pix', payer: { email: buyerEmail || 'cliente@rynex10k.com' }, external_reference: orderId, date_of_expiration: expiresAt }) });
+  const result = await payment.json().catch(() => ({}));
+  if (!payment.ok || !result.id || !result.point_of_interaction?.transaction_data?.qr_code) { await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE order_id=? AND status='reserved'").bind(orderId).run(); await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(orderId).run(); console.error('Mercado Pago Pix error', payment.status); return fail('Não foi possível gerar o Pix. Tente novamente ou fale com o suporte.', 502); }
+  const transaction = result.point_of_interaction.transaction_data;
+  await env.DB.prepare('UPDATE orders SET mp_payment_id=? WHERE id=?').bind(String(result.id), orderId).run();
+  return json({ orderId, qrCode: transaction.qr_code, qrCodeBase64: transaction.qr_code_base64 || '', ticketUrl: transaction.ticket_url || '', expiresAt });
 }
+
+async function pollPayment(env, order) {
+  const accessToken = await mpAccessToken(env); if (!accessToken || !order.mp_payment_id || !['pending','fulfillment_pending'].includes(order.status)) return;
+  const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(order.mp_payment_id)}`, { headers: { authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) return; const payment = await response.json();
+  if (payment.status === 'approved') {
+    const { results: items = [] } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=? AND delivery_mode='automatic'").bind(order.id).all();
+    const hasManual = await env.DB.prepare("SELECT COUNT(*) AS n FROM order_items WHERE order_id=? AND delivery_mode='manual'").bind(order.id).first();
+    await env.DB.prepare("UPDATE orders SET status='paid',paid_at=?,buyer_email=? WHERE id=? AND status IN ('pending','fulfillment_pending')").bind(nowIso(), payment.payer?.email || order.buyer_email || null, order.id).run();
+    await env.DB.prepare("UPDATE inventory SET status='delivered',delivered_at=? WHERE order_id=? AND status='reserved'").bind(nowIso(), order.id).run();
+    if (Number(hasManual?.n || 0) > 0) await env.DB.prepare('INSERT OR IGNORE INTO conversations(id,order_id) VALUES(?,?)').bind(order.id, order.id).run();
+    for (const item of items) { const delivered = Number((await env.DB.prepare("SELECT COUNT(*) AS n FROM inventory WHERE order_id=? AND product_id=? AND status='delivered'").bind(order.id, item.product_id).first())?.n || 0); if (delivered < Number(item.quantity)) { await env.DB.prepare("UPDATE orders SET status='fulfillment_pending' WHERE id=?").bind(order.id).run(); break; } }
+  } else if (['rejected','cancelled','refunded','charged_back'].includes(payment.status)) {
+    const status = payment.status === 'refunded' || payment.status === 'charged_back' ? 'refunded' : 'cancelled';
+    await env.DB.prepare("UPDATE orders SET status=? WHERE id=? AND status IN ('pending','paid')").bind(status, order.id).run();
+    await env.DB.prepare("UPDATE inventory SET status='available',order_id=NULL WHERE order_id=? AND status='reserved'").bind(order.id).run();
+  }
+}
+
 async function isOrderAccessible(env, id, current) {
   const order = await ownsOrder(env, id, current);
   if (!order) return null;
@@ -326,8 +328,10 @@ async function onApi({ request, env }) {
   if (method === 'GET' && path === 'orders/status') {
     const current = await requireRole(request, env, 'customer');
     if (!current) return fail('Faça login para ver seus pedidos.', 401);
-    const { results = [] } = await env.DB.prepare('SELECT id,status,paid_at,created_at FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(current.actor_id).all();
-    return json({ orders: results });
+    const { results = [] } = await env.DB.prepare('SELECT id,status,paid_at,created_at,expires_at,mp_payment_id,buyer_email FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(current.actor_id).all();
+    for (const order of results) await pollPayment(env, order);
+    const { results: fresh = [] } = await env.DB.prepare('SELECT id,status,paid_at,created_at,expires_at FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(current.actor_id).all();
+    return json({ orders: fresh });
   }
   if (method === 'GET' && path === 'orders') {
     const current = await requireRole(request, env, 'customer');
@@ -361,6 +365,15 @@ async function onApi({ request, env }) {
   if (path.startsWith('admin/')) {
     const admin = await requireRole(request, env, 'admin');
     if (!admin) return fail('Acesso administrativo necessário.', 401);
+    if (method === 'POST' && path === 'admin/settings/mercadopago') {
+      const body = await readBody(request); const token = String(body.accessToken || '').trim();
+      if (token.length < 20 || token.length > 4096) return fail('Informe um Access Token válido do Mercado Pago.');
+      await setSetting(env, 'mp_access_token', token);
+      return json({ ok: true, configured: true });
+    }
+    if (method === 'GET' && path === 'admin/settings') {
+      return json({ mercadoPagoConfigured: Boolean(await mpAccessToken(env)) });
+    }
     if (method === 'GET' && path === 'admin/products') {
       const { results = [] } = await env.DB.prepare('SELECT * FROM products ORDER BY updated_at DESC').all();
       const products = await Promise.all(results.map(async (p) => {
