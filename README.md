@@ -62,7 +62,7 @@ Com o projeto Pages criado e os recursos configurados:
 npm run deploy
 ```
 
-Ou adicione os Secrets de repositório do GitHub `CLOUDFLARE_API_TOKEN` e `CLOUDFLARE_ACCOUNT_ID`; o workflow `.github/workflows/cloudflare-pages.yml` executa a validação e publica no Cloudflare Pages. O token usado pelo workflow precisa de permissão de edição de Cloudflare Pages.
+Ou adicione os Secrets de repositório do GitHub `CLOUDFLARE_API_TOKEN` e `CLOUDFLARE_ACCOUNT_ID`; depois, em **Actions → Deploy Rynex 10K to Cloudflare Pages → Run workflow**, faça a publicação manual. O workflow não publica automaticamente em cada push. O token precisa de permissão de edição de Cloudflare Pages.
 
 A URL inicial será `https://rynex-store.pages.dev`. O workflow GitHub Pages existente publica somente arquivos estáticos; ele não executa as Functions. Portanto o novo chat e o painel de canal só funcionam na origem do Cloudflare Pages (ou em um domínio próprio ligado a esse projeto). A publicação no Cloudflare não altera automaticamente o endereço GitHub Pages atual.
 
