@@ -1,6 +1,6 @@
 (()=>{
   const text=(v)=>String(v??'');
-  const RYNEX_BACKEND_URL=window.RYNEX_BACKEND_URL||'https://8328-ibwvlbjb35pjsfyo7vl7j-256fbad5.us1.manus.computer';
+  const RYNEX_BACKEND_URL=window.RYNEX_BACKEND_URL||'https://rynexhub-2khnthk4.manus.space';
   window.RZK_CATALOG_READY=fetch(`${RYNEX_BACKEND_URL}/api/catalog`,{headers:{accept:'application/json'}})
     .then(async r=>{if(!r.ok)throw new Error('Não foi possível carregar o catálogo.');return r.json()})
     .then(data=>{
