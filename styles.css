@@ -23,3 +23,14 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.page-ready main{animation:none}}
 
 .pix-payment-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:rgba(5,2,12,.82);backdrop-filter:blur(12px)}.pix-payment-card{position:relative;width:min(480px,100%);padding:32px;border:1px solid rgba(187,128,255,.35);border-radius:24px;background:#130e1d;box-shadow:0 30px 100px #000}.pix-payment-card h2{margin:8px 0}.pix-payment-card p{color:#c6bdd0;line-height:1.6}.pix-payment-close{position:absolute;right:16px;top:10px;border:0;background:transparent;color:#fff;font-size:28px;cursor:pointer}.pix-payment-qr{display:block;width:220px;height:220px;margin:18px auto;border-radius:12px;background:#fff}.pix-payment-code{width:100%;min-height:92px;margin:8px 0 14px;padding:12px;border:1px solid #ffffff22;border-radius:12px;background:#090711;color:#fff;resize:none}.pix-copy-button{width:100%;border:0}.pix-account-link{display:block;margin-top:14px;text-align:center;color:#d8b4fe;text-decoration:none}
+
+/* Layout refinado para coleções com poucos itens */
+.categories-page .categories-grid{grid-template-columns:repeat(auto-fit,minmax(300px,520px));justify-content:start;gap:20px}
+.categories-page .category-tile{min-height:180px;box-shadow:0 16px 45px #0005}
+.categories-page .category-tile-overlay{padding:22px;background:linear-gradient(0deg,#08060cf2 0%,#08060c00 72%)}
+.collection-page{grid-template-columns:240px minmax(0,1fr);gap:32px}
+.collection-main{width:100%}
+.collection-grid{grid-template-columns:repeat(auto-fit,minmax(280px,360px));justify-content:start;gap:20px}
+.collection-grid .product-card{min-height:100%}
+@media(max-width:760px){.categories-page .categories-grid{grid-template-columns:1fr}.categories-page .category-tile{min-height:150px}.collection-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
+@media(max-width:480px){.collection-grid{grid-template-columns:1fr}.collection-grid .product-card{max-width:420px}}
