@@ -7,3 +7,7 @@ binding = "DB"
 database_name = "rynex-store-db"
 database_id = "PREENCHER_COM_O_ID_DO_D1"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "SUPPORT_FILES"
+bucket_name = "rynex-support-files"
