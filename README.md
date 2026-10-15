@@ -17,14 +17,14 @@ A implementação nova usa **Cloudflare Pages + Pages Functions + D1**. O GitHub
 
 - Catálogo dinâmico: produtos, preço, categoria, período e tipo de entrega são cadastrados no painel `/admin/` sem editar código.
 - Contas de cliente com senha; `/account/` exibe histórico e data da compra.
-- Checkout Pro do Mercado Pago; o servidor valida a assinatura do webhook e consulta o pagamento antes de liberar entrega.
+- Checkout Pix do Mercado Pago com QR Code, código copiável e consulta automática do pagamento; webhook não é obrigatório.
 - Entrega automática: logins/senhas criptografados com AES-GCM no D1 e exibidos somente ao comprador autenticado após confirmação.
 - Entrega manual: conversa privada no site e tópico privado no Discord quando o bot do PC estiver online; mensagens sincronizadas nos dois sentidos.
 - Segredos e credenciais ficam fora do repositório.
 
 ## Pré-requisitos
 
-Conta Cloudflare no plano Free, acesso ao repositório, Node.js 20+ e credenciais de integração do Mercado Pago (Access Token e segredo de assinatura de Webhooks) para aceitar pagamentos reais. O Mercado Pago pode cobrar tarifas por venda.
+Conta Cloudflare no plano Free, acesso ao repositório, Node.js 20+ e credenciais de integração do Mercado Pago (somente Access Token) para aceitar pagamentos reais. O Mercado Pago pode cobrar tarifas por venda.
 
 ## D1 e publicação
 
@@ -46,11 +46,11 @@ No painel Cloudflare, crie um projeto Pages conectado ao repositório, escolha a
 
 ## Segredos do Cloudflare
 
-No projeto Pages, em **Settings → Variables and Secrets → Production**, adicione como **Secrets**: `ADMIN_ACCESS_KEY` (chave longa para `/admin/`), `DELIVERY_ENCRYPTION_KEY` (Base64 de exatamente 32 bytes), `BOT_SHARED_SECRET` (segredo privado entre site e bot), `MP_ACCESS_TOKEN` (token de produção Mercado Pago) e `MP_WEBHOOK_SECRET` (segredo de assinatura dos Webhooks Mercado Pago). Gere chaves no terminal privado com `openssl rand -base64 32`; não cole no repositório ou mensagens. Faça backup protegido da chave `DELIVERY_ENCRYPTION_KEY`: sem ela, as credenciais criptografadas que já estiverem no banco não poderão ser recuperadas.
+No projeto Pages, em **Settings → Variables and Secrets → Production**, adicione como **Secrets**: `ADMIN_ACCESS_KEY` (chave longa para `/admin/`), `DELIVERY_ENCRYPTION_KEY` (Base64 de exatamente 32 bytes), `BOT_SHARED_SECRET` (segredo privado entre site e bot), `MP_ACCESS_TOKEN` (opcional: o token pode ser salvo pelo painel administrativo; `MP_WEBHOOK_SECRET` é opcional). Gere chaves no terminal privado com `openssl rand -base64 32`; não cole no repositório ou mensagens. Faça backup protegido da chave `DELIVERY_ENCRYPTION_KEY`: sem ela, as credenciais criptografadas que já estiverem no banco não poderão ser recuperadas.
 
 ## Mercado Pago
 
-No painel de integrações do Mercado Pago, cadastre o webhook `https://SEU-DOMINIO/api/payments/webhook` para notificações de pagamento e configure a chave de assinatura. O Checkout Pro usa essa URL. Para testes, use credenciais e compradores de teste. O retorno do navegador não libera produto: a liberação depende da validação de assinatura e confirmação do status aprovado consultado no servidor.
+O painel administrativo aceita somente o Access Token do Mercado Pago. O checkout usa Pix direto (`/v1/payments`), mostra QR Code/código copiável e consulta o status no servidor a cada atualização de Minhas compras. Para testes, use credenciais e compradores de teste; o retorno do navegador não libera produto sozinho.
 
 ## Bot no PC
 
