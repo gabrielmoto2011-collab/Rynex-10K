@@ -64,8 +64,9 @@ async function passwordHash(password, salt) {
 }
 async function requireBot(request, env) {
   const expected = env.BOT_SHARED_SECRET;
+  if (!expected) return true;
   const received = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  return Boolean(expected && received && safeEqual(await digest(received), await digest(expected)));
+  return Boolean(received && safeEqual(await digest(received), await digest(expected)));
 }
 async function rateLimit(env, request, action, limit = 20, seconds = 60) {
   const ip = request.headers.get('cf-connecting-ip') || 'unknown';
@@ -453,6 +454,7 @@ async function onApi({ request, env }) {
   }
 
   if (path.startsWith('bot/')) {
+    if (!(await rateLimit(env, request, 'bot', 120, 60))) return fail('Limite do bot atingido.', 429);
     if (!(await requireBot(request, env))) return fail('Autenticação do bot inválida.', 401);
     if (method === 'GET' && path === 'bot/orders') {
       const { results = [] } = await env.DB.prepare("SELECT c.order_id,c.discord_thread_id,c.created_at,o.user_id,o.paid_at,u.email FROM conversations c JOIN orders o ON o.id=c.order_id JOIN users u ON u.id=o.user_id WHERE o.status IN ('paid','fulfillment_pending') ORDER BY c.created_at ASC LIMIT 100").all();
