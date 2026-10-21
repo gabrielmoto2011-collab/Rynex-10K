@@ -64,7 +64,7 @@ async function passwordHash(password, salt) {
 }
 async function requireBot(request, env) {
   const expected = env.BOT_SHARED_SECRET;
-  if (!expected) return true;
+  if (!expected) return false;
   const received = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   return Boolean(received && safeEqual(await digest(received), await digest(expected)));
 }
@@ -106,6 +106,38 @@ async function setSetting(env, key, value) {
   await env.DB.prepare('INSERT INTO settings(key,encrypted_payload,iv,updated_at) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,updated_at=excluded.updated_at').bind(key, encrypted.encrypted, encrypted.iv, nowIso()).run();
 }
 async function mpAccessToken(env) { return (await getSetting(env, 'mp_access_token')) || env.MP_ACCESS_TOKEN || ''; }
+function supportFileName(value) { return String(value || 'arquivo').replace(/[\\/\x00-\x1f\x7f]/g, '_').slice(0, 180) || 'arquivo'; }
+async function saveSupportAttachments(env, form, ticketId, messageId) {
+  const files = form.getAll('files').filter((file) => file && typeof file.arrayBuffer === 'function' && Number(file.size) > 0);
+  if (files.length > 4) throw Object.assign(new Error('Anexe no máximo 4 arquivos por mensagem.'), { status: 400 });
+  if (files.some((file) => Number(file.size) > 8 * 1024 * 1024)) throw Object.assign(new Error('Cada arquivo pode ter no máximo 8 MB.'), { status: 413 });
+  if (files.reduce((sum, file) => sum + Number(file.size), 0) > 20 * 1024 * 1024) throw Object.assign(new Error('O tamanho total dos anexos não pode passar de 20 MB.'), { status: 413 });
+  if (files.length && !env.SUPPORT_FILES) throw Object.assign(new Error('O armazenamento privado de anexos ainda não está configurado no Cloudflare.'), { status: 503 });
+  const saved = [];
+  for (const file of files) {
+    const id = randomId(); const objectKey = `support/${ticketId}/${randomId()}`;
+    const fileName = supportFileName(file.name); const contentType = String(file.type || 'application/octet-stream').slice(0, 120);
+    await env.SUPPORT_FILES.put(objectKey, await file.arrayBuffer(), { httpMetadata: { contentType, contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}` } });
+    try {
+      await env.DB.prepare('INSERT INTO support_attachments(id,message_id,object_key,file_name,content_type,size_bytes) VALUES(?,?,?,?,?,?)').bind(id, messageId, objectKey, fileName, contentType, Number(file.size)).run();
+      saved.push({ id, file_name: fileName, content_type: contentType, size_bytes: Number(file.size) });
+    } catch (error) { await env.SUPPORT_FILES.delete(objectKey); throw error; }
+  }
+  return saved;
+}
+async function supportMessageAttachments(env, messageId) {
+  const { results = [] } = await env.DB.prepare('SELECT id,file_name,content_type,size_bytes FROM support_attachments WHERE message_id=? ORDER BY created_at').bind(messageId).all();
+  return results;
+}
+async function supportAttachmentResponse(env, id) {
+  if (!env.SUPPORT_FILES) return fail('Armazenamento de anexos não configurado.', 503);
+  const row = await env.DB.prepare('SELECT object_key,file_name,content_type FROM support_attachments WHERE id=?').bind(id).first();
+  if (!row) return fail('Arquivo não encontrado.', 404);
+  const object = await env.SUPPORT_FILES.get(row.object_key);
+  if (!object) return fail('Arquivo não encontrado.', 404);
+  const safeName = encodeURIComponent(row.file_name || 'arquivo');
+  return new Response(object.body, { headers: { 'content-type': row.content_type || 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${safeName}`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } });
+}
 
 function priceLabel(cents) { return (Number(cents) / 100).toFixed(2); }
 function publicProduct(row, stock = null) {
@@ -339,6 +371,66 @@ async function onApi({ request, env }) {
     if (!current) return fail('Faça login para ver seus pedidos.', 401);
     return json({ orders: await userOrders(env, current.actor_id) });
   }
+  if (method === 'GET' && path === 'support/tickets') {
+    const current = await requireRole(request, env, 'customer');
+    if (!current) return fail('Entre na sua conta para acessar o suporte.', 401);
+    const { results = [] } = await env.DB.prepare("SELECT t.id,t.subject,t.status,t.created_at,t.updated_at,(SELECT m.body FROM support_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_message FROM support_tickets t WHERE t.user_id=? ORDER BY t.updated_at DESC LIMIT 100").bind(current.actor_id).all();
+    return json({ tickets: results });
+  }
+  if (method === 'POST' && path === 'support/tickets') {
+    const current = await requireRole(request, env, 'customer');
+    if (!current) return fail('Entre na sua conta para abrir um atendimento.', 401);
+    if (!(await rateLimit(env, request, 'support-ticket', 5, 300))) return fail('Você abriu muitos atendimentos. Aguarde alguns minutos.', 429);
+    const form = await request.formData(); const subject = String(form.get('subject') || 'Atendimento Rynex').trim().slice(0, 120); const body = String(form.get('message') || '').trim();
+    const files = form.getAll('files').filter((file) => file && typeof file.arrayBuffer === 'function' && Number(file.size) > 0);
+    if (!subject || subject.length > 120 || body.length > 4000 || (!body && !files.length)) return fail('Informe um assunto e uma mensagem ou anexe um arquivo.');
+    if (files.length && !env.SUPPORT_FILES) return fail('O armazenamento privado de anexos ainda não está configurado no Cloudflare.', 503);
+    const ticketId = randomId();
+    await env.DB.prepare('INSERT INTO support_tickets(id,user_id,subject) VALUES(?,?,?)').bind(ticketId, current.actor_id, subject).run();
+    const inserted = await env.DB.prepare("INSERT INTO support_messages(ticket_id,sender_role,sender_label,body) VALUES(?,'customer',?,?)").bind(ticketId, current.actor_id, body).run();
+    const messageId = Number(inserted.meta?.last_row_id || 0);
+    const attachments = await saveSupportAttachments(env, form, ticketId, messageId);
+    await env.DB.prepare('UPDATE support_tickets SET updated_at=? WHERE id=?').bind(nowIso(), ticketId).run();
+    return json({ ticketId, messageId, attachments }, 201);
+  }
+  const supportTicketMatch = path.match(/^support\/tickets\/([0-9a-f-]+)(?:\/(messages|close))?$/i);
+  if (supportTicketMatch) {
+    const current = await requireRole(request, env, 'customer');
+    if (!current) return fail('Faça login para acessar este atendimento.', 401);
+    const ticketId = supportTicketMatch[1]; const action = supportTicketMatch[2] || '';
+    const ticket = await env.DB.prepare('SELECT id,user_id,subject,status,created_at,updated_at FROM support_tickets WHERE id=? AND user_id=?').bind(ticketId, current.actor_id).first();
+    if (!ticket) return fail('Atendimento não encontrado.', 404);
+    if (method === 'GET' && action === 'messages') {
+      const { results = [] } = await env.DB.prepare('SELECT id,sender_role,sender_label,body,created_at FROM support_messages WHERE ticket_id=? ORDER BY id ASC LIMIT 500').bind(ticketId).all();
+      const messages = await Promise.all(results.map(async (message) => ({ ...message, attachments: await supportMessageAttachments(env, message.id) })));
+      return json({ ticket, messages });
+    }
+    if (method === 'POST' && action === 'messages') {
+      if (ticket.status !== 'open') return fail('Este atendimento está encerrado.', 409);
+      if (!(await rateLimit(env, request, 'support-message', 30, 60))) return fail('Aguarde antes de enviar novas mensagens.', 429);
+      const form = await request.formData(); const body = String(form.get('message') || '').trim();
+      const files = form.getAll('files').filter((file) => file && typeof file.arrayBuffer === 'function' && Number(file.size) > 0);
+      if (body.length > 4000 || (!body && !files.length)) return fail('Escreva uma mensagem ou anexe um arquivo.');
+      if (files.length && !env.SUPPORT_FILES) return fail('O armazenamento privado de anexos ainda não está configurado no Cloudflare.', 503);
+      const inserted = await env.DB.prepare("INSERT INTO support_messages(ticket_id,sender_role,sender_label,body) VALUES(?,'customer',?,?)").bind(ticketId, current.actor_id, body).run();
+      const messageId = Number(inserted.meta?.last_row_id || 0);
+      const attachments = await saveSupportAttachments(env, form, ticketId, messageId);
+      await env.DB.prepare('UPDATE support_tickets SET updated_at=? WHERE id=?').bind(nowIso(), ticketId).run();
+      return json({ ok: true, messageId, attachments }, 201);
+    }
+    if (method === 'POST' && action === 'close') {
+      await env.DB.prepare("UPDATE support_tickets SET status='closed',updated_at=? WHERE id=? AND user_id=?").bind(nowIso(), ticketId, current.actor_id).run();
+      return json({ ok: true });
+    }
+  }
+  const customerAttachmentMatch = path.match(/^support\/attachments\/([0-9a-f-]+)$/i);
+  if (customerAttachmentMatch && method === 'GET') {
+    const current = await requireRole(request, env, 'customer');
+    if (!current) return fail('Faça login para baixar este arquivo.', 401);
+    const owned = await env.DB.prepare('SELECT a.id FROM support_attachments a JOIN support_messages m ON m.id=a.message_id JOIN support_tickets t ON t.id=m.ticket_id WHERE a.id=? AND t.user_id=?').bind(customerAttachmentMatch[1], current.actor_id).first();
+    if (!owned) return fail('Arquivo não encontrado.', 404);
+    return supportAttachmentResponse(env, customerAttachmentMatch[1]);
+  }
   const orderChatMatch = path.match(/^orders\/([0-9a-f-]+)\/messages$/i);
   if (orderChatMatch && method === 'GET') {
     const current = await requireRole(request, env, 'any');
@@ -372,8 +464,15 @@ async function onApi({ request, env }) {
       await setSetting(env, 'mp_access_token', token);
       return json({ ok: true, configured: true });
     }
+    if (method === 'POST' && path === 'admin/settings/discord') {
+      const body = await readBody(request); const channelId = String(body.channelId || '').trim();
+      if (channelId && !/^\d{15,22}$/.test(channelId)) return fail('Informe um ID de canal Discord válido (15 a 22 dígitos).');
+      await setSetting(env, 'discord_ticket_channel_id', channelId);
+      return json({ ok: true, configured: Boolean(channelId) });
+    }
     if (method === 'GET' && path === 'admin/settings') {
-      return json({ mercadoPagoConfigured: Boolean(await mpAccessToken(env)) });
+      const support = await env.DB.prepare("SELECT COUNT(*) AS n FROM support_tickets WHERE status='open'").first();
+      return json({ mercadoPagoConfigured: Boolean(await mpAccessToken(env)), supportDiscordChannelId: await getSetting(env, 'discord_ticket_channel_id'), supportStorageReady: Boolean(env.SUPPORT_FILES), botSharedSecretConfigured: Boolean(env.BOT_SHARED_SECRET), openSupportTickets: Number(support?.n || 0) });
     }
     if (method === 'GET' && path === 'admin/products') {
       const { results = [] } = await env.DB.prepare('SELECT * FROM products ORDER BY updated_at DESC').all();
@@ -450,12 +549,60 @@ async function onApi({ request, env }) {
       const { results = [] } = await env.DB.prepare("SELECT c.id,c.order_id,c.discord_thread_id,c.updated_at,o.status,o.created_at,u.email FROM conversations c JOIN orders o ON o.id=c.order_id JOIN users u ON u.id=o.user_id ORDER BY c.updated_at DESC LIMIT 200").all();
       return json({ conversations: results });
     }
+    if (method === 'GET' && path === 'admin/support/tickets') {
+      const { results = [] } = await env.DB.prepare("SELECT t.id,t.subject,t.status,t.discord_thread_id,t.created_at,t.updated_at,u.email,(SELECT m.body FROM support_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_message,(SELECT COUNT(*) FROM support_messages m WHERE m.ticket_id=t.id) AS message_count FROM support_tickets t JOIN users u ON u.id=t.user_id ORDER BY t.updated_at DESC LIMIT 250").all();
+      return json({ tickets: results });
+    }
     return fail('Rota administrativa não encontrada.', 404);
   }
 
   if (path.startsWith('bot/')) {
     if (!(await rateLimit(env, request, 'bot', 120, 60))) return fail('Limite do bot atingido.', 429);
     if (!(await requireBot(request, env))) return fail('Autenticação do bot inválida.', 401);
+    if (method === 'GET' && path === 'bot/settings') {
+      return json({ supportDiscordChannelId: await getSetting(env, 'discord_ticket_channel_id') });
+    }
+    if (method === 'GET' && path === 'bot/support/tickets') {
+      const { results = [] } = await env.DB.prepare("SELECT t.id AS ticket_id,t.subject,t.status,t.discord_thread_id,t.created_at,t.updated_at,u.email FROM support_tickets t JOIN users u ON u.id=t.user_id WHERE t.status='open' ORDER BY t.created_at ASC LIMIT 100").all();
+      return json({ tickets: results });
+    }
+    const supportThreadMatch = path.match(/^bot\/support\/tickets\/([0-9a-f-]+)\/thread$/i);
+    if (supportThreadMatch && method === 'PUT') {
+      const body = await readBody(request); const threadId = String(body.discordThreadId || '').trim();
+      if (!/^\d{15,22}$/.test(threadId)) return fail('ID do tópico Discord inválido.');
+      await env.DB.prepare('UPDATE support_tickets SET discord_thread_id=?,updated_at=? WHERE id=?').bind(threadId, nowIso(), supportThreadMatch[1]).run();
+      return json({ ok: true });
+    }
+    if (method === 'GET' && path === 'bot/support/messages') {
+      const { results = [] } = await env.DB.prepare("SELECT m.id,m.ticket_id,m.body,m.created_at,t.subject,t.discord_thread_id FROM support_messages m JOIN support_tickets t ON t.id=m.ticket_id WHERE m.sender_role='customer' AND m.discord_message_id IS NULL AND t.status='open' AND t.discord_thread_id IS NOT NULL ORDER BY m.id ASC LIMIT 30").all();
+      const messages = await Promise.all(results.map(async (message) => ({ ...message, attachments: await supportMessageAttachments(env, message.id) })));
+      return json({ messages });
+    }
+    const botAttachmentMatch = path.match(/^bot\/support\/attachments\/([0-9a-f-]+)$/i);
+    if (botAttachmentMatch && method === 'GET') return supportAttachmentResponse(env, botAttachmentMatch[1]);
+    const supportDiscordMessageMatch = path.match(/^bot\/support\/messages\/([0-9]+)\/discord$/i);
+    if (supportDiscordMessageMatch && method === 'PUT') {
+      const body = await readBody(request); const discordMessageId = String(body.discordMessageId || '').trim();
+      if (!/^\d{15,22}$/.test(discordMessageId)) return fail('ID da mensagem Discord inválido.');
+      await env.DB.prepare("UPDATE support_messages SET discord_message_id=? WHERE id=? AND sender_role='customer' AND discord_message_id IS NULL").bind(discordMessageId, Number(supportDiscordMessageMatch[1])).run();
+      return json({ ok: true });
+    }
+    if (method === 'POST' && path === 'bot/support/messages') {
+      const form = await request.formData(); const ticketId = String(form.get('ticketId') || '').trim();
+      const discordMessageId = String(form.get('discordMessageId') || '').trim(); const body = String(form.get('message') || '').trim();
+      const files = form.getAll('files').filter((file) => file && typeof file.arrayBuffer === 'function' && Number(file.size) > 0);
+      if (!/^[0-9a-f-]{36}$/i.test(ticketId) || !/^\d{15,22}$/.test(discordMessageId) || body.length > 4000 || (!body && !files.length)) return fail('Mensagem de suporte inválida.');
+      const prior = await env.DB.prepare('SELECT id FROM support_messages WHERE discord_message_id=?').bind(discordMessageId).first();
+      if (prior) return json({ ok: true, duplicate: true });
+      const ticket = await env.DB.prepare("SELECT id FROM support_tickets WHERE id=? AND status='open'").bind(ticketId).first();
+      if (!ticket) return fail('Atendimento não encontrado ou encerrado.', 404);
+      if (files.length && !env.SUPPORT_FILES) return fail('O armazenamento privado de anexos ainda não está configurado no Cloudflare.', 503);
+      const inserted = await env.DB.prepare("INSERT INTO support_messages(ticket_id,sender_role,sender_label,body,discord_message_id) VALUES(?,'admin','Equipe Rynex',?,?)").bind(ticketId, body, discordMessageId).run();
+      const messageId = Number(inserted.meta?.last_row_id || 0);
+      const attachments = await saveSupportAttachments(env, form, ticketId, messageId);
+      await env.DB.prepare('UPDATE support_tickets SET updated_at=? WHERE id=?').bind(nowIso(), ticketId).run();
+      return json({ ok: true, messageId, attachments }, 201);
+    }
     if (method === 'GET' && path === 'bot/orders') {
       const { results = [] } = await env.DB.prepare("SELECT c.order_id,c.discord_thread_id,c.created_at,o.user_id,o.paid_at,u.email FROM conversations c JOIN orders o ON o.id=c.order_id JOIN users u ON u.id=o.user_id WHERE o.status IN ('paid','fulfillment_pending') ORDER BY c.created_at ASC LIMIT 100").all();
       const orders = await Promise.all(results.map(async (row) => {

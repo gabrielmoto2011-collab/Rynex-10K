@@ -1,6 +1,7 @@
 (()=>{
   const text=(v)=>String(v??'');
-  const RYNEX_BACKEND_URL=window.RYNEX_BACKEND_URL||'https://rynexhub-2khnthk4.manus.space';
+  const legacyGithubPages=location.hostname.endsWith('.github.io');
+  const RYNEX_BACKEND_URL=window.RYNEX_BACKEND_URL||(legacyGithubPages?'https://rynexhub-2khnthk4.manus.space':location.origin);
   window.RZK_API_BASE=RYNEX_BACKEND_URL;
   window.RZK_CATALOG_READY=fetch(`${RYNEX_BACKEND_URL}/api/catalog`,{headers:{accept:'application/json'}})
     .then(async r=>{if(!r.ok)throw new Error('Não foi possível carregar o catálogo.');return r.json()})

@@ -7,7 +7,8 @@
     "dev": "wrangler pages dev .",
     "deploy": "wrangler pages deploy . --project-name=rynex-store",
     "db:apply": "wrangler d1 migrations apply rynex-store-db --remote",
-    "check": "node --input-type=module --check < 'functions/api/[[path]].js'"
+    "storage:create": "wrangler r2 bucket create rynex-support-files",
+    "check": "node --input-type=module --check < 'functions/api/[[path]].js' && node --check site.js && node --check products.js && node --check support.js && node --check admin/admin-support.js"
   },
   "devDependencies": {
     "wrangler": "^4.43.0"
