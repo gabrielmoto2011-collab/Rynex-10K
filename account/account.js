@@ -24,6 +24,7 @@ async function load(){
  const response=await fetch(api('/api/auth/me'),{credentials:'include'}),me=await response.json();
  if(!me.user){const base=document.body.dataset.base||'../';location.replace(`${base}login/?next=${encodeURIComponent(`${base}account/`)}`);return}
  $('#account-email').textContent=me.user.email;
+ $('#profile-name').value=me.user.name||'';$('#profile-avatar-url').value=me.user.avatarUrl||'';if(me.user.avatarUrl)$('#profile-avatar').src=me.user.avatarUrl;
  const responseOrders=await fetch(api('/api/orders'),{credentials:'include'}),data=await responseOrders.json();
  if(!responseOrders.ok)throw new Error(data.error||'Não foi possível carregar os pedidos.');
  const list=$('#orders-list');
@@ -61,5 +62,6 @@ function monitorStatuses(orders){
  $('#logout-button').addEventListener('click',async()=>{await fetch(api('/api/auth/logout'),{method:'POST',credentials:'include'});location.replace(`${document.body.dataset.base||'../'}index.html`)});
 const q=new URLSearchParams(location.search);
 if(q.has('pagamento'))$('#account-notice').textContent=q.get('pagamento')==='sucesso'?'Retorno recebido. A página acompanha a confirmação do Mercado Pago.':q.get('pagamento')==='pendente'?'Pagamento pendente de confirmação. Esta página atualiza automaticamente.':'Não foi possível concluir o pagamento. Confira seu histórico ou tente novamente.';
-load().catch(error=>{$('#orders-list').innerHTML=`<div class="state-card"><strong>Não foi possível abrir seus pedidos</strong><p>${esc(error.message)}</p></div>`});
-})();
+ load().catch(error=>{$('#orders-list').innerHTML=`<div class="state-card"><strong>Não foi possível abrir seus pedidos</strong><p>${esc(error.message)}</p></div>`});
+ $('#profile-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');const message=$('#profile-message');button.disabled=true;try{const response=await fetch(api('/api/profile'),{method:'PUT',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({name:$('#profile-name').value,avatarUrl:$('#profile-avatar-url').value})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Não foi possível salvar.');if(data.user.avatarUrl)$('#profile-avatar').src=data.user.avatarUrl;message.textContent='Perfil salvo.'}catch(error){message.textContent=error.message}finally{button.disabled=false}});
+ })();
